@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store

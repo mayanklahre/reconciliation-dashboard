@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pandas
+rapidfuzz
+python-multipart
+playwright
+beautifulsoup4
+pdfplumber
