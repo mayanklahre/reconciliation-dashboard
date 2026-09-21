@@ -1,8 +1,9 @@
-fastapi
-uvicorn
-pandas
-rapidfuzz
-python-multipart
-playwright
-beautifulsoup4
-pdfplumber
+beautifulsoup4==4.13.4
+fastapi==0.115.12
+openpyxl==3.1.5
+pandas==2.2.3
+pdfplumber==0.11.5
+playwright==1.51.0
+python-multipart==0.0.20
+rapidfuzz==3.12.2
+uvicorn==0.34.0

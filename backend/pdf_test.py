@@ -1,18 +1,17 @@
-import cloudscraper
 import pdfplumber
 import io
 import re
+from urllib.request import urlopen
 
 def extract_valuation_data(pdf_url):
     print(f"Downloading: {pdf_url}")
     
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'darwin', 'desktop': True})
-    response = scraper.get(pdf_url)
-    
-    if response.status_code != 200:
-        return None
+    with urlopen(pdf_url) as response:
+        if response.status != 200:
+            return None
+        pdf_bytes = response.read()
         
-    with pdfplumber.open(io.BytesIO(response.content)) as pdf:
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         text = pdf.pages[0].extract_text()
         
         # 1. Extract the Date (Looks for "Valuation as on [Date]")

@@ -7,6 +7,12 @@ import io
 import re
 import asyncio
 from datetime import datetime
+from pathlib import Path
+import json
+from rapidfuzz import fuzz
+
+
+AUDIT_LOG_DIR = Path(__file__).resolve().parent / "audit_logs"
 
 
 # ── FILE READER: handles CSV (with junk header rows) and Excel ────────────────
@@ -60,41 +66,42 @@ def is_car_series(csv_series):
 
 
 # ── PDF PARSER: reads ALL pages and returns (datetime, amount) history ────────
-def extract_all_valuations(pdf_bytes):
+def _extract_valuations_from_text(full_text):
+    """Extract valuation dates and amounts from text collected from a report."""
     results = []
+    chunks = re.split(r'Valuation\s+as\s+(?:of|on)\s+', full_text, flags=re.IGNORECASE)
+
+    for chunk in chunks[1:]:
+        date_match = re.match(r'([\d\w\s,]{5,30}?202\s*\d)', chunk)
+        if not date_match:
+            continue
+        raw_date = re.sub(r'\s+', ' ', date_match.group(1)).strip().replace("202 ", "202")
+        dt = parse_date(raw_date)
+        if dt is None:
+            continue
+
+        ine_idx = chunk.find('INE')
+        if ine_idx == -1:
+            continue
+
+        scan = chunk[ine_idx:ine_idx+800]
+        decimals = re.findall(r'(?<![\d,])\d{1,5}\.\d{1,4}(?!\d)', scan)
+        valid = [float(d) for d in decimals if 0 < float(d) < 10000]
+        if valid:
+            results.append((dt, valid[0]))
+
+    return results
+
+
+def extract_all_valuations(pdf_bytes):
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            full_text = ""
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    full_text += "\n" + text
-
-        chunks = re.split(r'Valuation\s+as\s+(?:of|on)\s+', full_text, flags=re.IGNORECASE)
-
-        for chunk in chunks[1:]:
-            date_match = re.match(r'([\d\w\s]{5,30}?202\s*\d)', chunk)
-            if not date_match:
-                continue
-            raw_date = re.sub(r'\s+', ' ', date_match.group(1)).strip().replace("202 ", "202")
-            dt = parse_date(raw_date)
-            if dt is None:
-                continue
-
-            ine_idx = chunk.find('INE')
-            if ine_idx == -1:
-                continue
-
-            scan = chunk[ine_idx:ine_idx+800]
-            decimals = re.findall(r'(?<![\d,])\d{1,5}\.\d{1,4}(?!\d)', scan)
-            valid = [float(d) for d in decimals if 0 < float(d) < 10000]
-            if valid:
-                results.append((dt, valid[0]))
+            full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        return _extract_valuations_from_text(full_text)
 
     except Exception as e:
         print(f"   PDF Parse Error: {e}")
-
-    return results
+        return []
 
 
 # ── SCRAPE ALL PDF LINKS FROM SITE ────────────────────────────────────────────
@@ -134,7 +141,52 @@ def find_series_link(all_links, csv_series):
         else:
             if fn.endswith(f'_{letter}') or fn.endswith(f'-{letter}'):
                 return link
+
+    # Some source files use slightly different separators or labels.  Keep the
+    # car/non-car boundary strict, then accept only a high-confidence match.
+    expected = f"CAR {letter}" if is_car else f"SERIES {letter}"
+    candidates = [
+        link for link in all_links
+        if ("CAR" in link['fn_upper']) == is_car
+        and re.search(rf'\b{re.escape(letter)}\b', link['fn_upper'].replace('_', ' ').replace('-', ' '))
+    ]
+    if candidates:
+        def score(link):
+            normalized = link['fn_upper'].replace('_', ' ').replace('-', ' ')
+            compact = re.sub(r'\b(SERIES|REPORT|VALUATION|PDF)\b', '', normalized)
+            compact = re.sub(r'\s+', ' ', compact).strip()
+            return max(
+                fuzz.partial_ratio(expected, normalized),
+                fuzz.ratio(expected, compact),
+            )
+
+        best = max(candidates, key=score)
+        if score(best) >= 85:
+            return best
     return None
+
+
+def persist_audit_log(results):
+    """Write an immutable, timestamped record for one reconciliation run."""
+    AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().astimezone().strftime('%Y%m%dT%H%M%S%f%z')
+    path = AUDIT_LOG_DIR / f"reconciliation_{timestamp}.json"
+    rows = [
+        {
+            "series_name": row["series_name"],
+            "matched_pdf_filename": row["matched_series"],
+            "csv_date": row["csv_date"],
+            "csv_amount": row["csv_amount"],
+            "system_date": row["system_date"],
+            "system_amount": row["system_amount"],
+            "variance": row["variance"],
+            "status": row["status"],
+        }
+        for row in results
+    ]
+    path.write_text(json.dumps({"run_timestamp": datetime.now().astimezone().isoformat(), "rows": rows}, indent=2), encoding="utf-8")
+    print(f"🧾 Audit log saved: {path}")
+    return path
 
 
 # ── MAIN RECONCILIATION ENGINE ────────────────────────────────────────────────
@@ -270,4 +322,5 @@ async def process_reconciliation(file_path):
 
         await browser.close()
 
+    persist_audit_log(results)
     return results
