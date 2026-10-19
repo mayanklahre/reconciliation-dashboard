@@ -8,6 +8,18 @@ env/
 __pycache__/
 *.pyc
 
-# OS files
+# Generated client-sensitive audit data
+backend/audit_logs/
+*.log
+
+# OS and local tooling
 .DS_Store
 .venv/
+.coverage
+.pytest_cache/
+playwright-report/
+test-results/
+
+# Frontend build output
+frontend/node_modules/
+frontend/dist/
